@@ -2,6 +2,8 @@ package actor
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 type wk struct {
@@ -11,34 +13,21 @@ type wk struct {
 
 type done struct{}
 
-func (w *wk) Recieve(msg any, from Addr) error {
-	switch msg := msg.(type) {
-	case int:
-		w.counter += msg
-	}
-	return nil
-}
-
-type ptr interface {
-	Actor
-}
-
 func count() Actor {
 	i := 0
-	return func(c Ctx, from Addr, msg any) error {
+	return func(c Ctx, from PID, msg any) error {
 		switch msg := msg.(type) {
 		case int:
 			i += msg
 		case error:
 			switch msg {
 			case Death:
-				c.Spawn()
-				MSpawn(c, from, count())
+				MSpawn(c, count())
 			default:
 				return msg
 			}
-		case Addr:
-			c.Send(msg, i)
+		case PID:
+			Send(c, msg, i)
 		default:
 			// wtf
 		}
@@ -47,16 +36,19 @@ func count() Actor {
 }
 
 func TestSpawn(t *testing.T) {
-	w := New()
-	w.Spawn("root", func(c Ctx, from Addr, message any) error {
+	w := New(func(c Ctx, from PID, message any) error {
 		switch msg := message.(type) {
-		case *Signal:
-			switch msg.Handle() {
-			case Init:
+		case Init:
+			pid := MSpawn(c, count())
+			Send(c, pid, 100)
+			Send(c, pid, 100)
+			Send(c, pid, c.PID())
+			Stop(c, pid)
 
-			}
-
+		case int:
+			assert.Equal(t, msg, 200)
 		}
+		return nil
 	})
 
 	w.Wait()
