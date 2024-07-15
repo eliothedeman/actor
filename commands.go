@@ -31,3 +31,12 @@ func Stop(c Ctx, pid PID) {
 func StopSelf(c Ctx) {
 	Stop(c, c.PID())
 }
+
+// Set a value to be available in this process, even after it has been restarted.
+func Set[T any](c Ctx, key string, value T) {
+	c.localMemory[key] = value
+}
+
+func Get[T any](c Ctx, key string) T {
+	return c.localMemory[key].(T)
+}

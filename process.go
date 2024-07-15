@@ -22,9 +22,10 @@ func (c *Ctx) msg(to PID, data any) *msg {
 type Init struct{}
 
 type process struct {
-	pid   PID
-	in    chan *msg
-	actor func(Ctx, PID, any) error
+	pid         PID
+	in          chan *msg
+	actor       func(Ctx, PID, any) error
+	localMemory map[string]any
 }
 
 type signal int
@@ -48,6 +49,9 @@ func (s signal) String() string {
 func (p *process) supervise(ctx Ctx) {
 	var supervisors []PID
 	scope := slog.With("scope", "supervise", "pid", p.pid)
+	if p.localMemory == nil {
+		p.localMemory = make(map[string]any)
+	}
 
 	notifyErr := func(err error) {
 		for _, s := range supervisors {

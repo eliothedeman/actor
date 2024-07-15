@@ -74,3 +74,22 @@ func TestSupervise(t *testing.T) {
 		return nil
 	}).Wait()
 }
+
+func TestKV(t *testing.T) {
+	New(func(c Ctx, from PID, message any) error {
+		switch msg := message.(type) {
+		case Init:
+			Set(c, "tk", 400)
+			Send(c, c.PID(), 400)
+		case int:
+			assert.Equal(t,
+				msg,
+				400,
+			)
+			assert.Equal(t, Get[int](c, "tk"), msg)
+			StopSelf(c)
+		}
+		return nil
+	}).Wait()
+
+}
