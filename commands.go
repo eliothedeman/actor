@@ -15,7 +15,7 @@ type addSupervisor struct {
 }
 
 func Monitor(c Ctx, pid PID) {
-	Send(c, pid, addSupervisor{})
+	Send(c, pid, addSupervisor{c.pid})
 }
 
 func MSpawn(c Ctx, a Actor) PID {
@@ -26,4 +26,8 @@ func MSpawn(c Ctx, a Actor) PID {
 
 func Stop(c Ctx, pid PID) {
 	Send(c, pid, sigterm)
+}
+
+func StopSelf(c Ctx) {
+	Stop(c, c.PID())
 }

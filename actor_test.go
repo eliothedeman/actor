@@ -1,6 +1,7 @@
 package actor
 
 import (
+	"log"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,7 +12,11 @@ type wk struct {
 	counter int
 }
 
-type done struct{}
+type newCount struct {
+	reply PID
+}
+
+type crash struct{}
 
 func count() Actor {
 	i := 0
@@ -19,16 +24,17 @@ func count() Actor {
 		switch msg := msg.(type) {
 		case int:
 			i += msg
-		case error:
-			switch msg {
-			case Death:
-				MSpawn(c, count())
-			default:
-				return msg
-			}
+		case Down:
+			MSpawn(c, count())
+		case newCount:
+			Send(c, msg.reply, Spawn(c, count()))
+		case crash:
+			panic("test")
+
 		case PID:
 			Send(c, msg, i)
 		default:
+			log.Panicf("bad message %+v", msg)
 			// wtf
 		}
 		return nil
@@ -47,28 +53,24 @@ func TestSpawn(t *testing.T) {
 
 		case int:
 			assert.Equal(t, msg, 200)
+			Stop(c, c.PID())
 		}
 		return nil
 	})
 
 	w.Wait()
-	// jV
-	// Spawn(w, count())
-	// recieved := false
-	// c2 := Spawn(w, func(c *Ctx, msg any, from Addr) error {
-	// 	switch msg := msg.(type) {
-	// 	case int:
-	// 		assert.Equal(t, msg, 100)
-	// 		recieved = true
-	// 	}
-	// 	return nil
-	// })
+}
 
-	// Send(w, 100, c1)
-	// Send(w, c2, c1)
-
-	// Send(w, Terminate, c1)
-	// Send(w, Terminate, c2)
-	// w.Wait()
-	// assert.True(t, recieved)
+func TestSupervise(t *testing.T) {
+	New(func(c Ctx, from PID, message any) error {
+		switch msg := message.(type) {
+		case Init:
+			pid := MSpawn(c, count())
+			Send(c, pid, crash{})
+		case Down:
+			assert.ErrorIs(t, msg.Error, ErrPanic)
+			StopSelf(c)
+		}
+		return nil
+	}).Wait()
 }

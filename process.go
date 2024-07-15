@@ -1,5 +1,10 @@
 package actor
 
+import (
+	"fmt"
+	"log/slog"
+)
+
 type PID string
 
 type Ctx struct {
@@ -29,9 +34,37 @@ const (
 	sigSupervise
 )
 
+func (s signal) String() string {
+	switch s {
+	case sigterm:
+		return "sigterm"
+	case sigSupervise:
+		return "sigsupervise"
+	default:
+		return "invalid"
+	}
+}
+
 func (p *process) supervise(ctx Ctx) {
 	var supervisors []PID
+	scope := slog.With("scope", "supervise", "pid", p.pid)
+
+	notifyErr := func(err error) {
+		for _, s := range supervisors {
+			Send(ctx, s, Down{PID: p.pid, Error: err})
+		}
+	}
+
+	defer scope.Info("closed")
+	defer func() {
+		if err := recover(); err != nil {
+			scope.With("panic", err).Error("Recoverd panic")
+			notifyErr(fmt.Errorf("%w recovered panic: %+v", ErrPanic, err))
+		}
+	}()
+
 	for m := range p.in {
+		m.slog(scope).Info("process recieved message")
 		switch h := m.data.(type) {
 		case addSupervisor:
 			supervisors = append(supervisors, h.PID)
@@ -39,9 +72,8 @@ func (p *process) supervise(ctx Ctx) {
 		}
 		err := p.actor(ctx, m.from, m.data)
 		if err != nil {
-			for _, s := range supervisors {
-				Send(ctx, s, err)
-			}
+			notifyErr(err)
+			return
 		}
 	}
 }

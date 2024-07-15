@@ -8,7 +8,8 @@ import (
 
 var (
 	// Terminate indicates a process should not be restarted
-	Death = errors.New("death")
+	Death    = errors.New("death")
+	ErrPanic = errors.New("panic")
 )
 
 var actorCounter atomic.Int64
@@ -19,3 +20,8 @@ func nextPID() PID {
 }
 
 type Actor = func(c Ctx, from PID, message any) error
+
+type Down struct {
+	PID
+	Error error
+}
