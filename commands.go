@@ -1,12 +1,12 @@
 package actor
 
 func Send(c Ctx, to PID, message any) {
-	c.router <- c.msg(to, message)
+	c.mailman.inbox.Send(c.msg(to, message))
 }
 
 func Spawn(c Ctx, a Actor) PID {
 	pid := nextPID()
-	c.router <- c.msg(annon, spawnActor{pid, a})
+	c.spawn <- spawnActor{pid, a}
 	return pid
 }
 
@@ -15,7 +15,11 @@ type addSupervisor struct {
 }
 
 func Monitor(c Ctx, pid PID) {
-	Send(c, pid, addSupervisor{c.pid})
+	Send(c, pid, sigSupervise)
+}
+
+func SendToSupervisor(c Ctx, data any) {
+	Send(c, Root, data)
 }
 
 func MSpawn(c Ctx, a Actor) PID {
@@ -25,7 +29,7 @@ func MSpawn(c Ctx, a Actor) PID {
 }
 
 func Stop(c Ctx, pid PID) {
-	Send(c, pid, sigterm)
+	c.stop <- pid
 }
 
 func StopSelf(c Ctx) {

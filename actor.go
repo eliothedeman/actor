@@ -20,8 +20,3 @@ func nextPID() PID {
 }
 
 type Actor = func(c Ctx, from PID, message any) error
-
-type Down struct {
-	PID
-	Error error
-}

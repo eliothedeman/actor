@@ -1,5 +1,7 @@
 package actor
 
+import "github.com/eliothedeman/actor/queue"
+
 type msg struct {
 	data any
 	from PID
@@ -8,8 +10,7 @@ type msg struct {
 
 type mailman struct {
 	processes map[PID]*process
-	unread    []*msg
-	inbox     chan *msg
+	inbox     *queue.MQueue[*msg]
 }
 
 func (m *mailman) route(message *msg) {
@@ -17,13 +18,11 @@ func (m *mailman) route(message *msg) {
 		proc.in <- message
 		return
 	}
-
-	m.unread = append(m.unread, message)
 }
 
 type actorContext struct {
-	router chan *msg
 	*process
+	*world
 }
 
 func (a *actorContext) PID() PID {

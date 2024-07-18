@@ -30,11 +30,11 @@ func count() Actor {
 			Send(c, msg.reply, Spawn(c, count()))
 		case crash:
 			panic("test")
-
 		case PID:
 			Send(c, msg, i)
+		case Init:
 		default:
-			log.Panicf("bad message %+v", msg)
+			log.Panicf("bad message %T %+v", msg, msg)
 			// wtf
 		}
 		return nil
@@ -49,11 +49,11 @@ func TestSpawn(t *testing.T) {
 			Send(c, pid, 100)
 			Send(c, pid, 100)
 			Send(c, pid, c.PID())
-			Stop(c, pid)
 
 		case int:
 			assert.Equal(t, msg, 200)
-			Stop(c, c.PID())
+			Stop(c, from)
+			StopSelf(c)
 		}
 		return nil
 	})
@@ -63,19 +63,19 @@ func TestSpawn(t *testing.T) {
 
 func TestSupervise(t *testing.T) {
 	New(func(c Ctx, from PID, message any) error {
-		switch msg := message.(type) {
-		case Init:
-			pid := MSpawn(c, count())
-			Send(c, pid, crash{})
-		case Down:
-			assert.ErrorIs(t, msg.Error, ErrPanic)
+		Bind[Down](c, func(c Ctx, from PID, message Down) error {
+			assert.ErrorIs(t, message.Err, ErrPanic)
 			StopSelf(c)
-		}
+			return nil
+		})
+		pid := MSpawn(c, count())
+		Send(c, pid, crash{})
 		return nil
 	}).Wait()
 }
 
 func TestKV(t *testing.T) {
+	called := false
 	New(func(c Ctx, from PID, message any) error {
 		switch msg := message.(type) {
 		case Init:
@@ -89,7 +89,29 @@ func TestKV(t *testing.T) {
 			assert.Equal(t, Get[int](c, "tk"), msg)
 			StopSelf(c)
 		}
+		called = true
 		return nil
 	}).Wait()
+	assert.True(t, called)
+}
 
+func doubleBind(c Ctx, from PID, m any) error {
+	Bind[int](c, func(c Ctx, from PID, message int) error { return nil })
+	Bind[int](c, func(c Ctx, from PID, message int) error { return nil })
+	return nil
+}
+
+func TestBindTwice(t *testing.T) {
+	called := false
+	New(func(c Ctx, from PID, message any) error {
+		Bind[Down](c, func(c Ctx, from PID, message Down) error {
+			called = true
+			assert.ErrorIs(t, message.Err, errDoubleBind)
+			StopSelf(c)
+			return nil
+		})
+		MSpawn(c, doubleBind)
+		return nil
+	}).Wait()
+	assert.True(t, called)
 }

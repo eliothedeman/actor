@@ -26,6 +26,17 @@ type process struct {
 	in          chan *msg
 	actor       func(Ctx, PID, any) error
 	localMemory map[string]any
+	binder
+}
+
+type Down struct {
+	PID
+	Err error
+}
+
+type unhanldedError struct {
+	PID
+	err error
 }
 
 type signal int
@@ -47,37 +58,54 @@ func (s signal) String() string {
 }
 
 func (p *process) supervise(ctx Ctx) {
-	var supervisors []PID
+	supervisor := PID("init")
 	scope := slog.With("scope", "supervise", "pid", p.pid)
 	if p.localMemory == nil {
 		p.localMemory = make(map[string]any)
 	}
 
 	notifyErr := func(err error) {
-		for _, s := range supervisors {
-			Send(ctx, s, Down{PID: p.pid, Error: err})
-		}
+		scope.Error("sending down signal")
+		Send(ctx, supervisor, Down{PID: ctx.pid, Err: err})
+		StopSelf(ctx)
 	}
 
 	defer scope.Info("closed")
 	defer func() {
 		if err := recover(); err != nil {
 			scope.With("panic", err).Error("Recoverd panic")
+			if err, ok := err.(error); ok {
+				notifyErr(fmt.Errorf("%w recovered panic: %w", ErrPanic, err))
+				return
+			}
 			notifyErr(fmt.Errorf("%w recovered panic: %+v", ErrPanic, err))
 		}
 	}()
 
+	Bind[signal](ctx, func(c Ctx, from PID, message signal) error {
+		switch message {
+		case sigSupervise:
+			supervisor = from
+			scope = scope.With("supervisor", supervisor)
+			return nil
+		}
+		return fmt.Errorf("unknown signal %s", message)
+	})
+	Bind[Down](ctx, func(c Ctx, from PID, message Down) error {
+		return fmt.Errorf("unhandled error from %s %w", from, message.Err)
+	})
+
 	for m := range p.in {
-		m.slog(scope).Info("process recieved message")
-		switch h := m.data.(type) {
-		case addSupervisor:
-			supervisors = append(supervisors, h.PID)
+		if err, found := p.binder.boundActor(ctx, m); found {
+			if err != nil {
+				notifyErr(err)
+			}
 			continue
 		}
+		m.slog(scope).Info("process recieved message")
 		err := p.actor(ctx, m.from, m.data)
 		if err != nil {
 			notifyErr(err)
-			return
 		}
 	}
 }
