@@ -182,10 +182,10 @@ func (p *proc) call(c C, a any) {
 		fn(c, a)
 		return
 	}
-	// p.self.Slog(nil).
-	// WithGroup("call").
-	// With("payload", t, "handlers", p.handlers).
-	// Error("unhandled payload type")
+	p.self.Slog(nil).
+		WithGroup("call").
+		With("payload", t, "handlers", p.handlers).
+		Error("unhandled payload type")
 	panic(ErrDie)
 }
 

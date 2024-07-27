@@ -95,8 +95,9 @@ func player(b Binder) {
 }
 
 type game struct {
-	players []PID
-	throws  map[PID]throw
+	playerCount int
+	players     []PID
+	throws      map[PID]throw
 }
 
 func (g *game) mostCommon() throw {
@@ -133,7 +134,7 @@ func (g *game) bind(c Binder) {
 		Send(self, self.Self(), start{})
 	})
 	B(c, func(c C, s start) {
-		for i := 0; i < 1_000_0; i++ {
+		for i := 0; i < g.playerCount; i++ {
 			g.players = append(
 				g.players,
 				Spawn(c, player),
@@ -179,11 +180,13 @@ func (g *game) bind(c Binder) {
 type start struct{}
 
 func TestRun(t *testing.T) {
-	New(new(game).bind).Wait()
+	g := game{playerCount: 10000}
+	New(g.bind).Wait()
 }
 
 func BenchmarkGame(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		New(new(game).bind).Wait()
+		g := game{playerCount: 10000}
+		New(g.bind).Wait()
 	}
 }

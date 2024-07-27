@@ -20,10 +20,6 @@ func (m *mailbox[T]) pushBack(d T) {
 	m.data = append(m.data, d)
 }
 
-func (m *mailbox[T]) peekFront() T {
-	return m.data[0]
-}
-
 func (m *mailbox[T]) popFront() T {
 	t := m.data[0]
 	m.data = m.data[1:]
