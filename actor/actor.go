@@ -1,131 +1,91 @@
 package actor
 
 import (
-	"errors"
+	"fmt"
+	"log/slog"
 	"reflect"
+	"runtime/debug"
+	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-var ErrDie = errors.New("die")
+type errDie struct{}
 
-// type Proto = func(C)
+func (errDie) Error() string {
+	return "die"
+}
+func (errDie) String() string {
+	return "die"
+}
 
-// func New(p Proto) *World {
-// 	w := World{
-// 		ctx: ctx{
-// 			h:     map[reflect.Type]func(C, PID, any) error{},
-// 			alive: sync.WaitGroup{},
-// 		},
-// 	}
+var ErrDie = errDie{}
 
-// 	Spawn(&w.ctx, p)
-// 	return &w
-// }
+type childDie PID
 
-// type ctx struct {
-// 	h     handlers
-// 	alive sync.WaitGroup
-// }
+var nextPid atomic.Int64
 
-// type World struct {
-// 	ctx
-// }
-
-// func (c *ctx) Wait() {
-
-// }
-
-// func (c *ctx) handlers() handlers {
-// 	return c.h
-// }
-
-// type C interface {
-// 	handlers() handlers
-// 	Wait()
-// }
-
-// func Discard[T Msg](C, PID, T) error {
-// 	return nil
-// }
+func next() PID {
+	return PID(nextPid.Add(1))
+}
 
 type PID int
+
+func (p PID) Slog(l *slog.Logger) *slog.Logger {
+	if l == nil {
+		l = slog.Default()
+	}
+	return l.With("pid", p)
+}
+
 type Down struct {
 	Err error
 }
 type Unit struct{}
 
-// type Scalar interface {
-// 	constraints.Integer | constraints.Float | string | bool | Down | time.Time | ~struct{ comparable }
-// }
-
-// type IntSlices interface {
-// 	~[]int | ~[]int8 | ~[]int16 | ~[]int32 | ~[]int64 | ~[]uint | ~[]uint8 | ~[]uint16 | ~[]uint32 | ~[]uint64
-// }
-
-// type FloatSlices interface {
-// 	~[]float32 | ~[]float64
-// }
-// type StringSlices interface {
-// 	~[]string
-// }
-// type Slices interface {
-// 	IntSlices | FloatSlices | StringSlices
-// }
-
-// type IntMaps interface {
-// 	~map[string]int | ~map[string]int8 | ~map[string]int16 | ~map[string]int32 | ~map[string]int64 | ~map[string]uint | ~map[string]uint8 | ~map[string]uint16 | ~map[string]uint32 | ~map[string]uint64
-// }
-
-// type FloatMaps interface {
-// 	~map[string]float32 | ~map[string]float64
-// }
-
-// type Maps interface {
-// 	IntMaps | FloatMaps | map[string]string | map[string]PID
-// }
-
-type pidMgr struct{}
-
-func (p *pidMgr) next() PID {
-	return 0
-}
-
-func (p *pidMgr) get(PID) *proc {
-	return nil
-}
-
-func (p *pidMgr) set(PID, *proc) {
-
-}
-
-func (p *pidMgr) add(*proc) PID {
-	return p.next()
+func (p *proc) mkChild() *proc {
+	x := &proc{
+		parent:   p,
+		self:     next(),
+		wg:       sync.WaitGroup{},
+		handlers: map[reflect.Type]actor{},
+		in:       newMailBox[any](),
+	}
+	p.children = append(p.children, x)
+	return x
 }
 
 type Msg interface {
 	comparable
 }
-type actor func(C, PID, any)
-type A[T Msg] func(C, PID, T)
+type actor func(C, any)
+type A[T Msg] func(C, T)
 type Selfer interface {
 	Self() PID
 }
+
+// returns parent pid or self if root
+type Parenter interface {
+	Parent() PID
+}
 type C interface {
 	Selfer
+	Parenter
+	Children() []PID
 	Sender
 	Spawner
 	Manager
 }
 type Binder interface {
 	bind(reflect.Type, actor)
-	call(C, PID, any)
+	call(C, any)
 }
 
-func B[T Msg](b Binder, f func(C, PID, T)) {
+func B[T Msg](b Binder, f func(C, T)) {
 	var t T
-	b.bind(reflect.TypeOf(t), func(c C, p PID, a any) {
-		f(c, p, a.(T))
+	b.bind(reflect.TypeOf(t), func(c C, a any) {
+		f(c, a.(T))
 	})
 }
 
@@ -138,14 +98,11 @@ func Manage(m Manager, p PID) PID {
 }
 
 type Spawner interface {
-	binder() Binder
-	spawn(Binder) PID
+	spawn(f func(Binder)) PID
 }
 
 func Spawn(s Spawner, f func(Binder)) PID {
-	b := s.binder()
-	f(b)
-	return s.spawn(b)
+	return s.spawn(f)
 }
 
 type MB interface {
@@ -159,7 +116,7 @@ func MSpawn(m MB, f func(Binder)) PID {
 }
 
 type Sender interface {
-	send(to PID, msg any)
+	send(to PID, msg any) bool
 }
 
 func Send[T Msg](s Sender, to PID, msg T) {
@@ -181,30 +138,55 @@ func SendAt[T Msg](s Sender, to PID, msg T, at time.Time) {
 		Send(s, to, msg)
 	}()
 }
+func Broadcast(s Sender, to []PID, msg any) {
+	for _, t := range to {
+		Send(s, t, msg)
+	}
+}
 
-func Discard[T Msg](C, PID, T) {}
+func Alert(s Sender, to PID, at time.Time) {
+	SendAt(s, to, at, at)
+}
+
+func Discard[T Msg](C, T) {}
 
 type Waiter interface {
 	Wait()
 }
 
+func (p *proc) slog() *slog.Logger {
+	return p.self.Slog(nil)
+}
+
 type proc struct {
-	parent *proc
-	PID
+	parent   *proc
+	self     PID
 	wg       sync.WaitGroup
 	handlers map[reflect.Type]actor
+	in       *mailbox[any]
 	children []*proc
 }
 
 // bind implements Binder.
 func (p *proc) bind(key reflect.Type, a actor) {
+	if p.handlers == nil {
+		p.handlers = make(map[reflect.Type]actor)
+	}
 	p.handlers[key] = a
 }
 
 // call implements Binder.
-func (p *proc) call(c C, pid PID, a any) {
+func (p *proc) call(c C, a any) {
 	t := reflect.TypeOf(a)
-	p.handlers[t](c, pid, a)
+	if fn, ok := p.handlers[t]; ok {
+		fn(c, a)
+		return
+	}
+	// p.self.Slog(nil).
+	// WithGroup("call").
+	// With("payload", t, "handlers", p.handlers).
+	// Error("unhandled payload type")
+	panic(ErrDie)
 }
 
 // Wait implements Waiter.
@@ -214,68 +196,129 @@ func (p *proc) Wait() {
 
 // Self implements C.
 func (p *proc) Self() PID {
-	return p.PID
+	return p.self
 }
 
-// binder implements C.
-func (p *proc) binder() Binder {
-	return p
+func (p *proc) Parent() PID {
+	if p.parent == nil {
+		return p.self
+	}
+	return p.parent.self
+}
+
+func (p *proc) Children() (out []PID) {
+	for _, c := range p.children {
+		out = append(out, c.self)
+	}
+	return
+}
+
+type RTS[T any] struct {
+	From PID
+	Msg  T
 }
 
 // manage implements C.
 func (p *proc) manage(pid PID) {
-	panic("unimplemented")
+	panic("unimplemented manage")
 }
 
 // send implements C.
-func (p *proc) send(to PID, msg any) {
-	panic("unimplemented")
+func (p *proc) send(to PID, msg any) bool {
+	// dead
+	if p == nil {
+		return false
+	}
+	// p.self.Slog(nil).
+	// 	With("to", to, "msg", fmt.Sprintf("%T:%+v", msg, msg)).
+	// 	Debug("sending")
+	if p.self == to {
+		p.in.send(msg)
+		return true
+	}
+
+	if p.parent != nil && p.parent.self == to {
+		p.parent.in.send(msg)
+		return true
+	}
+	for _, c := range p.children {
+		if c.send(to, msg) {
+			return true
+		}
+	}
+	return false
 }
 
 // spawn implements C.
-func (p *proc) spawn(b Binder) PID {
-	child := &proc{
-		parent:   p,
-		PID:      0,
-		wg:       sync.WaitGroup{},
-		handlers: map[reflect.Type]actor{},
-		children: []*proc{},
-	}
-	p.children = append(p.children, child)
-	panic("unimplemented")
+func (p *proc) spawn(f func(Binder)) PID {
+	child := p.mkChild()
+	// p.self.Slog(nil).Debug("spawning", "child", child.self, "actor", f)
+	f(child)
+	go child.run()
+	return child.self
 }
 
-func newProc() *proc {
-	return &proc{}
+func (p *proc) runOnce(payload any) (err error) {
+	defer func() {
+		if mErr := recover(); mErr != nil {
+			switch x := mErr.(type) {
+			case error:
+				if x != ErrDie {
+					debug.PrintStack()
+				}
+				err = x
+			default:
+				err = fmt.Errorf("recovered from panic with unknown value %+v", err)
+			}
+		}
+	}()
+	switch x := payload.(type) {
+	case errDie:
+		return ErrDie
+	case childDie:
+		p.children = slices.DeleteFunc(p.children, func(c *proc) bool {
+			return c.self == PID(x)
+		})
+
+	default:
+		p.call(p, payload)
+	}
+	return nil
+}
+
+var allAlive = new(atomic.Int64)
+
+func (p *proc) run() {
+	defer func() {
+		p.wg.Done()
+		if p.parent != nil {
+			p.parent.in.send(childDie(p.self))
+		}
+		allAlive.Add(-1)
+	}()
+	allAlive.Add(1)
+	p.wg.Add(1)
+	for {
+		m := p.in.recieve()
+		err := p.runOnce(m)
+		if err != nil {
+			// p.Self().Slog(nil).Error("exiting", "err", err, "h", p.handlers)
+			return
+		}
+	}
 }
 
 func New(f func(Binder)) Waiter {
-	b := newProc()
-	Spawn(b, f)
-	return b
+
+	root := &proc{
+		parent:   nil,
+		self:     next(),
+		wg:       sync.WaitGroup{},
+		handlers: map[reflect.Type]actor{},
+		in:       newMailBox[any](),
+	}
+	f(root)
+	go Send(root, root.self, Unit{})
+	root.run()
+	return root
 }
-
-// type handlers map[reflect.Type]func(C, PID, any) error
-
-// type Handle[T Msg] func(self C, from PID, msg T) error
-
-// func Bind[T Msg](c C, f Handle[T]) {
-// 	h := c.handlers()
-// 	var t T
-// 	h[reflect.TypeOf(t)] = func(c C, p PID, a any) error {
-// 		return f(c, p, a.(T))
-// 	}
-// }
-
-// func Spawn(c C, prototype func(C)) PID {
-// 	return 0
-// }
-
-// func MSpawn(c C, prototype func(C)) PID {
-// 	// todo add monitoring here
-// 	return Spawn(c, prototype)
-// }
-
-// func Send[T Msg](c C, to PID, msg T) {
-
-// }
