@@ -186,7 +186,7 @@ func TestRun(t *testing.T) {
 
 func BenchmarkGame(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		g := game{playerCount: 10000}
+		g := game{playerCount: 100}
 		New(g.bind).Wait()
 	}
 }

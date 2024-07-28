@@ -2,32 +2,24 @@ package actor
 
 import (
 	"sync"
+
+	"github.com/gammazero/deque"
 )
 
 type mailbox[T any] struct {
-	*sync.Cond
-	data   []T
+	sync.Cond
+	data   deque.Deque[T]
 	closed bool
 }
 
 func newMailBox[T any]() *mailbox[T] {
 	m := new(mailbox[T])
-	m.Cond = sync.NewCond(&sync.Mutex{})
+	m.Cond.L = &sync.Mutex{}
 	return m
 }
 
-func (m *mailbox[T]) pushBack(d T) {
-	m.data = append(m.data, d)
-}
-
-func (m *mailbox[T]) popFront() T {
-	t := m.data[0]
-	m.data = m.data[1:]
-	return t
-}
-
 func (m *mailbox[T]) len() int {
-	return len(m.data)
+	return m.data.Len()
 }
 
 func (m *mailbox[T]) close() {
@@ -40,7 +32,7 @@ func (m *mailbox[T]) close() {
 func (m *mailbox[T]) send(v T) {
 	m.L.Lock()
 	defer m.L.Unlock()
-	m.pushBack(v)
+	m.data.PushBack(v)
 	m.Signal()
 }
 
@@ -53,5 +45,5 @@ func (m *mailbox[T]) recieve() T {
 			panic("closed")
 		}
 	}
-	return m.popFront()
+	return m.data.PopFront()
 }
