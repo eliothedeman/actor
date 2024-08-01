@@ -15,7 +15,7 @@ func (errDie) String() string {
 
 var ErrDie = errDie{}
 
-type childDie PID
+type ChildDie PID
 
 var nextPid atomic.Int64
 

@@ -1,7 +1,9 @@
 package actor
 
 import (
+	"fmt"
 	"log"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 )
@@ -29,18 +31,20 @@ func (n *node) fork(a Actor) PID {
 	n.Lock()
 	defer n.Unlock()
 	i := id(namespaces.Add(1))
+	s := new(supervisor)
+	s.init(PID{
+		ns: i, actor: 0,
+	})
 	nx := &namespace{
 		id: i,
 		actors: map[id]Actor{
-			0: a,
+			0: s,
 		},
 	}
-	p := PID{ns: i, actor: 0}
 
-	a.init(p)
 	n.local[i] = nx
 	go nx.loop()
-	return p
+	return nx.spawn(a)
 }
 
 func (n *node) ns(i id) *namespace {
@@ -62,65 +66,99 @@ type namespace struct {
 	sync.Mutex
 	id
 	mailbox[mail]
-	actors map[id]Actor
+	actors      map[id]Actor
+	activeActor id
 }
 
 func (n *namespace) spawn(a Actor) PID {
-	n.Lock()
-	defer n.Unlock()
 	i := id(0)
 	for {
 		i++
 		if _, exists := n.actors[i]; !exists {
 			pid := PID{ns: n.id, actor: i}
+			a.init(pid)
 			n.actors[i] = a
 			return pid
 		}
 	}
-
 }
 
-type nsState int
+func (n *namespace) handleDeadActor(actor id) {
+	n.send(mail{
+		PID: PID{ns: n.id, actor: 0},
+		msg: ChildDie(PID{
+			ns: n.id, actor: actor,
+		}),
+	})
+}
 
-const (
-	nsAgain nsState = iota
-	nsStop
-)
-
-func (n *namespace) loopOnce() nsState {
+func (n *namespace) loopOnce() (err error) {
 	msg := n.recieve()
+	defer func() {
+		if e := recover(); e != nil {
+			switch e := e.(type) {
+			case errDie:
+				n.handleDeadActor(msg.actor)
+				// remove worker
+			case error:
+				debug.PrintStack()
+				err = e
+			default:
+				debug.PrintStack()
+				err = fmt.Errorf("paniced with non-error value %T:%+v", e, e)
+
+			}
+		}
+		n.activeActor = 0
+	}()
 
 	// sent to the wrong namespace. Or potentially needs to go to another ndoe.
 	if msg.ns != n.id {
 		thisNode.send(msg)
-		return nsAgain
+		return
 	}
+
+	n.Lock()
+	defer n.Unlock()
+	n.activeActor = msg.actor
 
 	if a, ok := n.actors[msg.actor]; ok {
 		a.Recieve(msg.msg)
 	} else {
-		log.Fatalf("Unable to route message %T:%+v", msg, msg)
+		log.Panicf("Unable to route message %T:%+v", msg, msg)
 	}
-	return nsAgain
+	return
 }
 
 func (n *namespace) loop() {
 	for {
-		switch n.loopOnce() {
-		case nsAgain:
-			continue
-		case nsStop:
-			return
+		err := n.loopOnce()
+		if err != nil {
+			panic(err)
 		}
 	}
 }
 
 type Handle interface {
 	Send(msg any)
+	Supervise(other Handle)
 }
 
 type handle struct {
 	PID
+}
+
+func (h *handle) Supervise(other Handle) {
+	thisNode.send(mail{
+		PID: PID{
+			ns:    other.(*handle).ns,
+			actor: 0,
+		},
+		msg: startSupervise{
+			parent: h.PID,
+			child:  other.(*handle).PID,
+		},
+	})
 }
 
 func (h *handle) Send(msg any) {

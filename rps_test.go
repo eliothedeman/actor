@@ -310,3 +310,38 @@ func BenchmarkGame(b *testing.B) {
 		<-done
 	}
 }
+
+type commander struct {
+	Ctx
+}
+
+func (c *commander) Recieve(m any) {
+	switch m := m.(type) {
+	case chan int:
+		Exit()
+		m <- 10
+
+	}
+}
+
+func TestExit(t *testing.T) {
+	done := make(chan int)
+	super := func(self Ctx, msg any) {
+		switch msg.(type) {
+		case ChildDie:
+			done <- 0
+
+		}
+	}
+	crasher := func(self Ctx, msg any) {
+		Exit()
+	}
+
+	s := Fork(Annon(super))
+	c := Fork(Annon(crasher))
+	c.Send(nil)
+	s.Supervise(c)
+
+	<-done
+
+}
